@@ -155,15 +155,16 @@ public class VTParserTables {
 		
 		/**
 		 * Checks if this state will respond to the given character event.
-		 * @param ch Character to check for.  Must be 0x00-0xff.
+		 * @param ch Character to check for.
 		 * @return
-		 * @throws IllegalArgumentException If ch is out of range.
 		 */
-		public boolean hasTransition(char ch) throws IllegalArgumentException {
-			if ((ch < 0x00) || (ch > 0xff)) {
-				throw new IllegalArgumentException("Key must be 0x00-0xff. Received 0x" + Integer.toHexString(ch) + "(" + (char)ch + ").");
-			}
-			// treat 0xa0-0xff as 0x20-0x7f
+		public boolean hasTransition(char ch) {
+			// This protocol is really only designed for 8-bit characters.
+			// If something higher (Unicode) comes in, treat it as 0xff.
+			ch = (char)Math.min(0xff, ch);
+			// "There are no explicit actions shown for incoming codes in 
+			// the GR area (A0-FF). In all states, these codes are treated 
+			// identically to GL codes 20-7F.
 			if (ch > 0x9f) {
 				ch &= 0x7f;
 			}
@@ -172,15 +173,16 @@ public class VTParserTables {
 
 		/**
 		 * Returns the Transition (if any) for the given character event, or null.
-		 * @param ch Character to look up.  Must be 0x00-0xff.
+		 * @param ch Character to look up.
 		 * @return
-		 * @throws IllegalArgumentException
 		 */
-		public Transition getTransition(char ch) throws IllegalArgumentException {
-			if ((ch < 0x00) || (ch > 0xff)) {
-				throw new IllegalArgumentException("Key must be 0x00-0xff. Received 0x" + Integer.toHexString(ch) + "(" + (char)ch + ").");
-			}
-			// treat 0xa0-0xff as 0x20-0x7f
+		public Transition getTransition(char ch) {
+			// This protocol is really only designed for 8-bit characters.
+			// If something higher (Unicode) comes in, treat it as 0xff.
+			ch = (char)Math.min(0xff, ch);
+			// "There are no explicit actions shown for incoming codes in 
+			// the GR area (A0-FF). In all states, these codes are treated 
+			// identically to GL codes 20-7F.
 			if (ch > 0x9f) {
 				ch &= 0x7f;
 			}
@@ -389,11 +391,10 @@ public class VTParserTables {
 	 * If the given State doesn't recognize the given character, looks for a transition
 	 * which is valid for any State.
 	 * @param state Starting state for character event.
-	 * @param ch Character to get Transition for.  Must be 0x00-0xff.
+	 * @param ch Character to get Transition for.
 	 * @return
-	 * @throws IllegalArgumentException If ch is out of range.
-	 */
-	public static Transition getTransition(State state, char ch) throws IllegalArgumentException {
+ */
+	public static Transition getTransition(State state, char ch) {
 		// if given state has a transition for this char, return it
 		StateTable table = states.get(state);
 		if ((table != null) && table.hasTransition(ch)) {
