@@ -37,21 +37,6 @@ import net.digger.util.VTParserTables.Transition;
  */
 public class VTParser {
 	/**
-	 * Interface definition for the escape sequence callback.
-	 */
-	public interface VTParserCallback {
-		/**
-		 * Called when an escape sequence is parsed.
-		 * @param action Escape sequence action.  One of CSI_DISPATCH, ERROR, ESC_DISPATCH, EXECUTE, HOOK, 
-		 * 		OSC_END, OSC_PUT, OSC_START, PRINT, PUT, UNHOOK
-		 * @param ch Final character of the escape sequence.
-		 * @param intermediateChars List of private marker and intermediate characters. (Ignore for EXECUTE and PRINT.)
-		 * @param params List of parameters. (Ignore for EXECUTE and PRINT.)
-		 */
-		public void call(Action action, char ch, List<Character> intermediateChars, List<Integer> params);
-	}
-	
-	/**
 	 * Maximum number of private markers and intermediate characters to collect.
 	 */
 	private static final int MAX_INTERMEDIATE_CHARS = 2;
@@ -64,9 +49,9 @@ public class VTParser {
 	 */
 	private State currentState;
 	/**
-	 * Caller-provided escape sequence callback.
+	 * Caller-provided emulator implementation.
 	 */
-	private VTParserCallback callback;
+	private VTEmulator emulator;
 	/**
 	 * Current number of private markers and intermediate characters.
 	 */
@@ -91,34 +76,50 @@ public class VTParser {
 	 * Flag to ignore additional parameters.
 	 */
 	private boolean ignoreParams;
+	/**
+	 * Flag to indicate using 7-bit transitions.
+	 */
+	private boolean is7bit;
 	
 	/**
-	 * Create a new instance of VTParser, and provide an escape sequence callback.
+	 * Create a new instance of VTParser, and provide a VTEmulator implementation.
 	 * @param callback Called when an escape sequence is parsed.
 	 */
-	public VTParser(VTParserCallback callback) {
+	public VTParser(VTEmulator emulator) {
 		currentState = State.GROUND;
-		this.callback = callback;
+		this.emulator = emulator;
+		is7bit = false;
+		clear();
+	}
+
+	/**
+	 * Create a new instance of VTParser using only 7-bit transitions, and provide a VTEmulator implementation.
+	 * This avoids the special handling of 0x80-0x9f, when working with a character set (such as
+	 * CP-437) where those are printable.  Any chars >0x7F will be treated as 0x7F.
+	 * @param callback Called when an escape sequence is parsed.
+	 */
+	public VTParser(VTEmulator emulator, boolean use7bits) {
+		currentState = State.GROUND;
+		this.emulator = emulator;
+		is7bit = use7bits;
 		clear();
 	}
 
 	/**
 	 * Process a character.
-	 * @param ch Character to process.  Must be 0x00-0xff.
+	 * @param ch Character to process.
 	 * @return Character sent to PRINT or EXECUTE, or null.
-	 * @throws IllegalArgumentException If ch is out of range.
 	 */
-	public Character parse(char ch) throws IllegalArgumentException {
+	public Character parse(char ch) {
 		return processCharEvent(ch);
 	}
 	
 	/**
 	 * Process a string.
-	 * @param str String to process.  Characters in string must be 0x00-0xff.
+	 * @param str String to process.
 	 * @return String of characters sent to PRINT or EXECUTE, or empty String.
-	 * @throws IllegalArgumentException If any character in str is out of range.
 	 */
-	public String parse(String str) throws IllegalArgumentException {
+	public String parse(String str) {
 		StringBuilder sb = new StringBuilder("");
 		for (int i=0; i<str.length(); i++) {
 			Character ch = processCharEvent(str.charAt(i));
@@ -131,11 +132,10 @@ public class VTParser {
 
 	/**
 	 * Returns the given text with all escape sequences stripped out of it. 
-	 * @param text Text to process.  Characters in text must be 0x00-0xff.
+	 * @param text Text to process.
 	 * @return Text with all escape sequences removed.
-	 * @throws IllegalArgumentException If any character in text is out of range.
 	 */
-	public static String stripString(String text) throws IllegalArgumentException {
+	public static String stripString(String text) {
 		VTParser vtp = new VTParser(null);
 		return vtp.parse(text);
 	}
@@ -154,13 +154,17 @@ public class VTParser {
 	
 	/**
 	 * Process a character through the parser.
-	 * @param ch Character to process.  Must be 0x00-0xff.
+	 * @param ch Character to process.
 	 * @return Character sent to PRINT or EXECUTE, or null.
-	 * @throws IllegalArgumentException If ch is out of range.
 	 */
-	private Character processCharEvent(char ch) throws IllegalArgumentException {
+	private Character processCharEvent(char ch) {
 		Character printed = null;
-		Transition trans = VTParserTables.getTransition(currentState, ch);
+		Transition trans;
+		if (is7bit) {
+			trans = VTParserTables.getTransition(currentState, (char)Math.min(0x7f, ch));
+		} else {
+			trans = VTParserTables.getTransition(currentState, ch);
+		}
 
 		/* Perform up to three actions:
 		 *   1. the exit action of the old state
@@ -193,31 +197,66 @@ public class VTParser {
 		// Some actions we handle internally (like parsing parameters), others
 		// we hand to our client for processing
 		switch (action) {
-			case PRINT:
+			// Actions to hand off to emulator:
+			case CSI_DISPATCH:
+				if (emulator != null) {
+					emulator.actionCSIDispatch(ch, intermediateCharList(), paramList());
+				}
+				break;
+			case DCS_HOOK:
+				if (emulator != null) {
+					emulator.actionDCSHook(ch, intermediateCharList(), paramList());
+				}
+				break;
+			case DCS_PUT:
+				if (emulator != null) {
+					emulator.actionDCSPut(ch);
+				}
+				break;
+			case DCS_UNHOOK:
+				if (emulator != null) {
+					emulator.actionDCSUnhook();
+				}
+				break;
+			case ERROR:
+				if (emulator != null) {
+					emulator.actionError();
+				}
+				break;
+			case ESC_DISPATCH:
+				if (emulator != null) {
+					emulator.actionEscapeDispatch(ch, intermediateCharList());
+				}
+				break;
 			case EXECUTE:
 				printed = ch;
-				// fall through...
-			case CSI_DISPATCH:
-			case ESC_DISPATCH:
-			case DCS_HOOK:
-			case DCS_PUT:
-			case DCS_UNHOOK:
+				if (emulator != null) {
+					emulator.actionExecute(ch);
+				}
+				break;
 			case OSC_END:
+				if (emulator != null) {
+					emulator.actionOSCEnd();
+				}
+				break;
 			case OSC_PUT:
+				if (emulator != null) {
+					emulator.actionOSCPut(ch);
+				}
+				break;
 			case OSC_START:
-				if (callback != null) {
-					List<Character> charlist = new ArrayList<>();
-					for (int i=0; i<intermediateCharCount; i++) {
-						charlist.add(intermediateChars[i]);
-					}
-					List<Integer> paramlist = new ArrayList<>();
-					for (int i=0; i<paramCount; i++) {
-						paramlist.add(params[i]);
-					}
-					callback.call(action, ch, charlist, paramlist);
+				if (emulator != null) {
+					emulator.actionOSCStart();
+				}
+				break;
+			case PRINT:
+				printed = ch;
+				if (emulator != null) {
+					emulator.actionPrint(ch);
 				}
 				break;
 
+			// Actions to handle internally:
 			case IGNORE:
 			case NO_ACTION:
 				// do nothing
@@ -264,12 +303,24 @@ public class VTParser {
 					params[current_param] += (ch - '0');
 				}
 				break;
-				
-			case ERROR:
-				callback.call(Action.ERROR, (char)0x0, new ArrayList<Character>(), new ArrayList<Integer>());
-				break;
 		}
 		return printed;
+	}
+	
+	private List<Character> intermediateCharList() {
+		List<Character> charlist = new ArrayList<>();
+		for (int i=0; i<intermediateCharCount; i++) {
+			charlist.add(intermediateChars[i]);
+		}
+		return charlist;
+	}
+
+	private List<Integer> paramList() {
+		List<Integer> paramlist = new ArrayList<>();
+		for (int i=0; i<paramCount; i++) {
+			paramlist.add(params[i]);
+		}
+		return paramlist;
 	}
 
 	/**
@@ -277,26 +328,73 @@ public class VTParser {
 	 * @param args
 	 */
 	public static void main(String[] args) {
-		VTParser parser = new VTParser((action, ch, intermediateChars, params) -> {
-			System.out.printf("Received action %s", action);
-			if (ch != 0) {
-				System.out.printf(", Char: 0x%02x ('%c')\n", (int)ch, ch);
-			}
-			if ((intermediateChars != null) && !intermediateChars.isEmpty()) {
-				System.out.printf("\t%d Intermediate chars: ", intermediateChars.size());
-				for (Character intch : intermediateChars) {
-					System.out.printf("0x%02x ('%c'), ", (int)intch, intch);
+		VTParser parser = new VTParser(new VTEmulator() {
+			@Override
+			public void actionCSIDispatch(char ch, List<Character> intermediateChars, List<Integer> params) {
+				printAction(Action.CSI_DISPATCH, ch, intermediateChars, params);
+			};
+			@Override
+			public void actionDCSHook(char ch, List<Character> intermediateChars, List<Integer> params) {
+				printAction(Action.DCS_HOOK, ch, intermediateChars, params);
+			};
+			@Override
+			public void actionDCSPut(char ch) {
+				printAction(Action.DCS_PUT, ch, null, null);
+			};
+			@Override
+			public void actionDCSUnhook() {
+				printAction(Action.DCS_UNHOOK, null, null, null);
+			};
+			@Override
+			public void actionError() {
+				printAction(Action.ERROR, null, null, null);
+			};
+			@Override
+			public void actionEscapeDispatch(char ch, List<Character> intermediateChars) {
+				printAction(Action.ESC_DISPATCH, ch, intermediateChars, null);
+			};
+			@Override
+			public void actionExecute(char ch) {
+				printAction(Action.EXECUTE, ch, null, null);
+			};
+			@Override
+			public void actionOSCEnd() {
+				printAction(Action.OSC_END, null, null, null);
+			};
+			@Override
+			public void actionOSCPut(char ch) {
+				printAction(Action.OSC_PUT, ch, null, null);
+			};
+			@Override
+			public void actionOSCStart() {
+				printAction(Action.OSC_START, null, null, null);
+			};
+			@Override
+			public void actionPrint(char ch) {
+				printAction(Action.PRINT, ch, null, null);
+			};
+			
+			private void printAction(Action action, Character ch, List<Character> intermediateChars, List<Integer> params) {
+				System.out.printf("Received action %s", action);
+				if ((ch != null) && (ch != 0)) {
+					System.out.printf(", Char: 0x%02x ('%c')\n", (int)ch, ch);
+				}
+				if ((intermediateChars != null) && !intermediateChars.isEmpty()) {
+					System.out.printf("\t%d Intermediate chars: ", intermediateChars.size());
+					for (Character intch : intermediateChars) {
+						System.out.printf("0x%02x ('%c'), ", (int)intch, intch);
+					}
+					System.out.println();
+				}
+				if ((params != null) && !params.isEmpty()) {
+					System.out.printf("\t%d Parameters: ", params.size());
+					for (Integer param : params) {
+						System.out.printf("%d, ", param);
+					}
+					System.out.println();
 				}
 				System.out.println();
 			}
-			if ((params != null) && !params.isEmpty()) {
-				System.out.printf("\t%d Parameters: ", params.size());
-				for (Integer param : params) {
-					System.out.printf("%d, ", param);
-				}
-				System.out.println();
-			}
-			System.out.println();
 		});
 		
 		Scanner in = new Scanner(System.in);

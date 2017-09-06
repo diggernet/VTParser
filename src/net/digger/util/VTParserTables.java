@@ -61,6 +61,7 @@ public class VTParserTables {
 		DCS_HOOK,
 		DCS_PUT,
 		DCS_UNHOOK,
+		ERROR,
 		ESC_DISPATCH,
 		EXECUTE,
 		IGNORE,
@@ -69,7 +70,6 @@ public class VTParserTables {
 		OSC_START,
 		PARAM,
 		PRINT,
-		ERROR,
 	};
 
 	/**
@@ -155,7 +155,7 @@ public class VTParserTables {
 		
 		/**
 		 * Checks if this state will respond to the given character event.
-		 * @param ch Character to check for.
+		 * @param ch Character to check for.  Values 0xA0-0xFF are treated as 0x20-0x7F.  Values >0xFF are treated as 0x7F.
 		 * @return
 		 */
 		public boolean hasTransition(char ch) {
@@ -173,7 +173,7 @@ public class VTParserTables {
 
 		/**
 		 * Returns the Transition (if any) for the given character event, or null.
-		 * @param ch Character to look up.
+		 * @param ch Character to look up.  Values 0xA0-0xFF are treated as 0x20-0x7F.  Values >0xFF are treated as 0x7F.
 		 * @return
 		 */
 		public Transition getTransition(char ch) {
@@ -214,7 +214,6 @@ public class VTParserTables {
 		st.put(State.NO_STATE, table);
 		
 		// GROUND state transitions
-		//FIXME: should GROUND have onEntry = CLEAR, to avoid passing old data to EXECUTE and PRINT?
 		table = new StateTable(Action.NO_ACTION, Action.NO_ACTION);
 		table.addTransitions(0x00, 0x17, Action.EXECUTE, State.NO_STATE);
 		table.addTransition(0x19, Action.EXECUTE, State.NO_STATE);
@@ -391,9 +390,9 @@ public class VTParserTables {
 	 * If the given State doesn't recognize the given character, looks for a transition
 	 * which is valid for any State.
 	 * @param state Starting state for character event.
-	 * @param ch Character to get Transition for.
+	 * @param ch Character to get Transition for.  Values 0xA0-0xFF are treated as 0x20-0x7F.  Values >0xFF are treated as 0x7F.
 	 * @return
- */
+	 */
 	public static Transition getTransition(State state, char ch) {
 		// if given state has a transition for this char, return it
 		StateTable table = states.get(state);
