@@ -31,17 +31,33 @@ import net.digger.util.VTParserTables.Transition;
  * with the details of each sequence.  That callback will need to implement whichever
  * sequences it chooses to support.
  * 
- * Implements Paul Flo Williams' state machine (http://vt100.net/emu/dec_ansi_parser).
+ * Implements Paul Flo Williams' state machine (https://vt100.net/emu/dec_ansi_parser).
  * Loosely based on Joshua Haberman's vtparse (https://github.com/haberman/vtparse).
  * @author walton
  */
 public class VTParser {
 	/**
 	 * Maximum number of private markers and intermediate characters to collect.
+	 * If more than this many private markers or intermediate characters are
+	 * encountered by Action.COLLECT, the control sequence is considered 
+	 * malformed, and ignored.
+	 * <p>
+	 * This effects the following states, which contain Action.COLLECT:<br>
+	 * State.ESCAPE_INTERMEDIATE:<br>
+	 * 		When transitioning to State.GROUND, Action.ESC_DISPATCH is ignored.<br>
+	 * State.CSI_INTERMEDIATE:<br>
+	 * 		When transitioning to State.GROUND, Action.CSI_DISPATCH is ignored.<br>
+	 * 		(Effectively, behaves as State.CSI_IGNORE instead.)<br>
+	 * State.DCS_INTERMEDIATE:<br>
+	 * 		After transitioning to State.DCS_PASSTHROUGH, these actions are ignored:<br>
+	 * 			Action.DCS_HOOK, Action.DCS_PUT, Action.DCS_UNHOOK<br>
+	 * 		(Effectively, behaves as State.DCS_IGNORE instead.)<br>
 	 */
 	private static final int MAX_INTERMEDIATE_CHARS = 2;
 	/**
 	 * Maximum number of parameters to collect.
+	 * If more than this many parameters are encountered by Action.PARAM,
+	 * the extra parameters are simply ignored.
 	 */
 	private static final int MAX_PARAMS = 16;
 	/**
@@ -61,9 +77,9 @@ public class VTParser {
 	 */
 	private char[] intermediateChars;
 	/**
-	 * Flag to ignore additional private markers and intermediate characters.
+	 * Flag to indicate too many private markers and intermediate characters.
 	 */
-	private boolean ignoreIntermediateChars;
+	private boolean tooManyIntermediateChars;
 	/**
 	 * Current number of parameters.
 	 */
@@ -73,9 +89,9 @@ public class VTParser {
 	 */
 	private Integer[] params;
 	/**
-	 * Flag to ignore additional parameters.
+	 * Flag to indicate too many parameters.
 	 */
-	private boolean ignoreParams;
+	private boolean tooManyParams;
 	/**
 	 * Flag to indicate using 7-bit transitions.
 	 */
@@ -146,10 +162,10 @@ public class VTParser {
 	private void clear() {
 		intermediateCharCount = 0;
 		intermediateChars = new char[MAX_INTERMEDIATE_CHARS];
-		ignoreIntermediateChars = false;
+		tooManyIntermediateChars = false;
 		paramCount = 0;
 		params = new Integer[MAX_PARAMS];
-		ignoreParams = false;
+		tooManyParams = false;
 	}
 	
 	/**
@@ -199,22 +215,22 @@ public class VTParser {
 		switch (action) {
 			// Actions to hand off to emulator:
 			case CSI_DISPATCH:
-				if (emulator != null) {
+				if ((emulator != null) && (!tooManyIntermediateChars)) {
 					emulator.actionCSIDispatch(ch, intermediateCharList(), paramList());
 				}
 				break;
 			case DCS_HOOK:
-				if (emulator != null) {
+				if ((emulator != null) && (!tooManyIntermediateChars)) {
 					emulator.actionDCSHook(ch, intermediateCharList(), paramList());
 				}
 				break;
 			case DCS_PUT:
-				if (emulator != null) {
+				if ((emulator != null) && (!tooManyIntermediateChars)) {
 					emulator.actionDCSPut(ch);
 				}
 				break;
 			case DCS_UNHOOK:
-				if (emulator != null) {
+				if ((emulator != null) && (!tooManyIntermediateChars)) {
 					emulator.actionDCSUnhook();
 				}
 				break;
@@ -224,7 +240,7 @@ public class VTParser {
 				}
 				break;
 			case ESC_DISPATCH:
-				if (emulator != null) {
+				if ((emulator != null) && (!tooManyIntermediateChars)) {
 					emulator.actionEscapeDispatch(ch, intermediateCharList());
 				}
 				break;
@@ -267,12 +283,9 @@ public class VTParser {
 				break;
 				
 			case COLLECT:
-				// From vt100.net:
-				// 		"If more than two intermediate characters arrive, the parser can just flag this so that the dispatch can be turned into a null operation."
-				// 		FIXME: So should CSI_DISPATCH, ESC_DISPATCH, and DCS_PUT do nothing if ignoreIntermediateChars?
 				// Append the character to the intermediate params
 				if ((intermediateCharCount + 1) > MAX_INTERMEDIATE_CHARS) {
-					ignoreIntermediateChars = true;
+					tooManyIntermediateChars = true;
 				} else {
 					intermediateChars[intermediateCharCount] = ch;
 					intermediateCharCount++;
@@ -287,13 +300,13 @@ public class VTParser {
 				}
 				if (ch == ';') {
 					if ((paramCount + 1) > MAX_PARAMS) {
-						ignoreParams = true;
+						tooManyParams = true;
 					} else {
 						// go to next param
 						// note that if param string starts with ';' then we jump to 2nd param
 						paramCount++;
 					}
-				} else if (!ignoreParams) {
+				} else if (!tooManyParams) {
 					// the character is a digit, and we haven't reached MAX_PARAMS
 					int current_param = paramCount - 1;
 					if (params[current_param] == null) {
