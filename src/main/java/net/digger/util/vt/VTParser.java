@@ -1,15 +1,5 @@
-package net.digger.util;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-
-import net.digger.util.VTParserTables.Action;
-import net.digger.util.VTParserTables.State;
-import net.digger.util.VTParserTables.Transition;
-
 /**
- * Copyright © 2017  David Walton
+ * Copyright © 2017-2018  David Walton
  * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -24,18 +14,27 @@ import net.digger.util.VTParserTables.Transition;
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+package net.digger.util.vt;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+import net.digger.util.fsm.ActionHandler;
 
 /**
  * VT/ANSI parser.
+ * <p>
  * This class parses text for escape sequences, and runs the caller-provided callback
  * with the details of each sequence.  That callback will need to implement whichever
  * sequences it chooses to support.
- * 
+ * <p>
  * Implements Paul Flo Williams' state machine (https://vt100.net/emu/dec_ansi_parser).
  * Loosely based on Joshua Haberman's vtparse (https://github.com/haberman/vtparse).
+ * 
  * @author walton
  */
-public class VTParser {
+public class VTParser implements ActionHandler<Action, State, Character> {
 	/**
 	 * Maximum number of private markers and intermediate characters to collect.
 	 * If more than this many private markers or intermediate characters are
@@ -54,106 +53,142 @@ public class VTParser {
 	 * 		(Effectively, behaves as State.DCS_IGNORE instead.)<br>
 	 */
 	private static final int MAX_INTERMEDIATE_CHARS = 2;
+	
 	/**
 	 * Maximum number of parameters to collect.
 	 * If more than this many parameters are encountered by Action.PARAM,
 	 * the extra parameters are simply ignored.
 	 */
 	private static final int MAX_PARAMS = 16;
+	
 	/**
-	 * Current state of the state machine.
+	 * Parser state machine.
 	 */
-	private State currentState;
+	private VTParserStateMachine stateMachine;
+
 	/**
 	 * Caller-provided emulator implementation.
 	 */
 	private VTEmulator emulator;
+	
 	/**
 	 * Current number of private markers and intermediate characters.
 	 */
 	private int intermediateCharCount;
+	
 	/**
 	 * Array of private markers and intermediate characters.
 	 */
 	private char[] intermediateChars;
+	
 	/**
 	 * Flag to indicate too many private markers and intermediate characters.
 	 */
 	private boolean tooManyIntermediateChars;
+	
 	/**
 	 * Current number of parameters.
 	 */
 	private int paramCount;
+	
 	/**
 	 * Array of parameters.
 	 */
 	private Integer[] params;
+	
 	/**
 	 * Flag to indicate too many parameters.
 	 */
 	private boolean tooManyParams;
-	/**
-	 * Flag to indicate using 7-bit transitions.
-	 */
-	private boolean is7bit;
 	
 	/**
 	 * Create a new instance of VTParser, and provide a VTEmulator implementation.
+	 * <p>
+	 * Event values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * 
 	 * @param callback Called when an escape sequence is parsed.
 	 */
 	public VTParser(VTEmulator emulator) {
-		currentState = State.GROUND;
-		this.emulator = emulator;
-		is7bit = false;
-		clear();
+		this(emulator, false);
 	}
 
 	/**
 	 * Create a new instance of VTParser using only 7-bit transitions, and provide a VTEmulator implementation.
+	 * If use7bits=true, event values >0x7F are treated as 0x7F.
 	 * This avoids the special handling of 0x80-0x9f, when working with a character set (such as
-	 * CP-437) where those are printable.  Any chars >0x7F will be treated as 0x7F.
+	 * CP-437) where those are printable.
+	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * 
 	 * @param callback Called when an escape sequence is parsed.
 	 */
 	public VTParser(VTEmulator emulator, boolean use7bits) {
-		currentState = State.GROUND;
+		if (use7bits) {
+			stateMachine = new VTParserStateMachine(this, (event) -> {
+				// Any chars >0x7F will be looked up as 0x7F.
+				return (char)Math.min(0x7f, event);
+			});
+		} else {
+			stateMachine = new VTParserStateMachine(this, (event) -> {
+				// This protocol is really only designed for 8-bit characters.
+				// If something higher (Unicode) comes in, look it up as 0xff.
+				event = (char)Math.min(0xff, event);
+				// "There are no explicit actions shown for incoming codes in 
+				// the GR area (A0-FF). In all states, these codes are treated 
+				// identically to GL codes 20-7F."
+				if (event > 0x9f) {
+					event = (char)(event & 0x7f);
+				}
+				return event;
+			});
+		}
 		this.emulator = emulator;
-		is7bit = use7bits;
 		clear();
 	}
 
 	/**
 	 * Process a character.
+	 * 
 	 * @param ch Character to process.
-	 * @return Character sent to PRINT or EXECUTE, or null.
 	 */
-	public Character parse(char ch) {
-		return processCharEvent(ch);
+	public void parse(char ch) {
+		stateMachine.handleEvent(ch);
 	}
 	
 	/**
 	 * Process a string.
+	 * 
 	 * @param str String to process.
-	 * @return String of characters sent to PRINT or EXECUTE, or empty String.
 	 */
-	public String parse(String str) {
-		StringBuilder sb = new StringBuilder("");
+	public void parse(String str) {
 		for (int i=0; i<str.length(); i++) {
-			Character ch = processCharEvent(str.charAt(i));
-			if (ch != null) {
-				sb.append(ch);
-			}
+			stateMachine.handleEvent(str.charAt(i));
 		}
-		return sb.toString();
 	}
 
 	/**
-	 * Returns the given text with all escape sequences stripped out of it. 
+	 * Returns the given text with all escape sequences stripped out of it.
+	 * If use7bits=true, event values >0x7F are treated as 0x7F.
+	 * This avoids the special handling of 0x80-0x9f, when working with a character set (such as
+	 * CP-437) where those are printable.
+	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * 
 	 * @param text Text to process.
 	 * @return Text with all escape sequences removed.
 	 */
-	public static String stripString(String text) {
-		VTParser vtp = new VTParser(null);
-		return vtp.parse(text);
+	public static String stripString(String text, boolean use7bits) {
+		StringBuilder sb = new StringBuilder();
+		VTParser vtp = new VTParser(new VTEmulator() {
+			@Override
+			public void actionExecute(char ch) {
+				sb.append(ch);
+			}
+			@Override
+			public void actionPrint(char ch) {
+				sb.append(ch);
+			}
+		}, use7bits);
+		vtp.parse(text);
+		return sb.toString();
 	}
 	
 	/**
@@ -168,48 +203,28 @@ public class VTParser {
 		tooManyParams = false;
 	}
 	
-	/**
-	 * Process a character through the parser.
-	 * @param ch Character to process.
-	 * @return Character sent to PRINT or EXECUTE, or null.
-	 */
-	private Character processCharEvent(char ch) {
-		Character printed = null;
-		Transition trans;
-		if (is7bit) {
-			trans = VTParserTables.getTransition(currentState, (char)Math.min(0x7f, ch));
-		} else {
-			trans = VTParserTables.getTransition(currentState, ch);
-		}
+	@Override
+	public void onEntry(State state, Action action) {
+		doAction(action, (char)0x00);
+	}
 
-		/* Perform up to three actions:
-		 *   1. the exit action of the old state
-		 *   2. the action associated with the transition
-		 *   3. the entry action of the new state
-		 */
-		if (trans.state != State.NO_STATE) {
-			doAction(VTParserTables.getState(currentState).onExit, (char)0x0);
-		}
+	@Override
+	public void onEvent(State state, Character event, Action action) {
+		doAction(action, event);
+	}
 
-		printed = doAction(trans.action, ch);
-
-		if (trans.state != State.NO_STATE) {
-			doAction(VTParserTables.getState(trans.state).onEntry, (char)0x0);
-			currentState = trans.state;
-		}
-
-		return printed;
+	@Override
+	public void onExit(State state, Action action) {
+		doAction(action, (char)0x00);
 	}
 	
 	/**
 	 * Handle the given Action with the given char.
-	 * @param action
-	 * @param ch
-	 * @return
+	 * 
+	 * @param action Action to perform.
+	 * @param ch Character event being handled
 	 */
-	private Character doAction(Action action, char ch) {
-		Character printed = null;
-		
+	private void doAction(Action action, char ch) {
 		// Some actions we handle internally (like parsing parameters), others
 		// we hand to our client for processing
 		switch (action) {
@@ -245,7 +260,6 @@ public class VTParser {
 				}
 				break;
 			case EXECUTE:
-				printed = ch;
 				if (emulator != null) {
 					emulator.actionExecute(ch);
 				}
@@ -266,7 +280,6 @@ public class VTParser {
 				}
 				break;
 			case PRINT:
-				printed = ch;
 				if (emulator != null) {
 					emulator.actionPrint(ch);
 				}
@@ -274,7 +287,6 @@ public class VTParser {
 
 			// Actions to handle internally:
 			case IGNORE:
-			case NO_ACTION:
 				// do nothing
 				break;
 
@@ -317,9 +329,13 @@ public class VTParser {
 				}
 				break;
 		}
-		return printed;
 	}
 	
+	/**
+	 * Convert intermediateChars array to a List.
+	 * 
+	 * @return List of intermediate chars.
+	 */
 	private List<Character> intermediateCharList() {
 		List<Character> charlist = new ArrayList<>();
 		for (int i=0; i<intermediateCharCount; i++) {
@@ -328,6 +344,11 @@ public class VTParser {
 		return charlist;
 	}
 
+	/**
+	 * Convert params array to a List.
+	 * 
+	 * @return List of params.
+	 */
 	private List<Integer> paramList() {
 		List<Integer> paramlist = new ArrayList<>();
 		for (int i=0; i<paramCount; i++) {
@@ -341,6 +362,7 @@ public class VTParser {
 	 * @param args
 	 */
 	public static void main(String[] args) {
+		StringBuilder sb = new StringBuilder();
 		VTParser parser = new VTParser(new VTEmulator() {
 			@Override
 			public void actionCSIDispatch(char ch, List<Character> intermediateChars, List<Integer> params) {
@@ -369,6 +391,7 @@ public class VTParser {
 			@Override
 			public void actionExecute(char ch) {
 				printAction(Action.EXECUTE, ch, null, null);
+				sb.append(ch);
 			};
 			@Override
 			public void actionOSCEnd() {
@@ -385,6 +408,7 @@ public class VTParser {
 			@Override
 			public void actionPrint(char ch) {
 				printAction(Action.PRINT, ch, null, null);
+				sb.append(ch);
 			};
 			
 			private void printAction(Action action, Character ch, List<Character> intermediateChars, List<Integer> params) {
@@ -413,8 +437,9 @@ public class VTParser {
 		Scanner in = new Scanner(System.in);
 		while (in.hasNextLine()) {
 			String line = in.nextLine();
-			String printed = parser.parse(line);
-			System.out.println(printed);
+			sb.setLength(0);
+			parser.parse(line);
+			System.out.println(sb.toString());
 		}
 		in.close();
 	}

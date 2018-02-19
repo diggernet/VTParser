@@ -1,7 +1,3 @@
-package net.digger.util;
-
-import java.util.List;
-
 /**
  * Copyright © 2017  David Walton
  * 
@@ -18,6 +14,9 @@ import java.util.List;
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+package net.digger.util.vt;
+
+import java.util.List;
 
 /**
  * Interface definition for an emulator based on VTParser.
@@ -58,7 +57,7 @@ public interface VTEmulator {
 	 */
 	default public void actionEscapeDispatch(char ch, List<Character> intermediateChars) {};
 	/**
-	 * Called for the EXECUTE action.
+	 * Called for the EXECUTE action.  This generally outputs control characters.
 	 * @param ch Final character of the escape sequence.
 	 */
 	default public void actionExecute(char ch) {};
@@ -76,7 +75,7 @@ public interface VTEmulator {
 	 */
 	default public void actionOSCStart() {};
 	/**
-	 * Called for the PRINT action.
+	 * Called for the PRINT action.  This generally prints characters.
 	 * @param ch Final character of the escape sequence.
 	 */
 	default public void actionPrint(char ch) {};
