@@ -104,9 +104,9 @@ public class VTParser implements ActionHandler<Action, State, Character> {
 	/**
 	 * Create a new instance of VTParser, and provide a VTEmulator implementation.
 	 * <p>
-	 * Event values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * Event values 0xA0-0xFF are treated as 0x20-0x7F and values above 0xFF are treated as 0x7F.
 	 * 
-	 * @param callback Called when an escape sequence is parsed.
+	 * @param emulator VTEmulator implementation called when an escape sequence is parsed.
 	 */
 	public VTParser(VTEmulator emulator) {
 		this(emulator, false);
@@ -114,12 +114,13 @@ public class VTParser implements ActionHandler<Action, State, Character> {
 
 	/**
 	 * Create a new instance of VTParser using only 7-bit transitions, and provide a VTEmulator implementation.
-	 * If use7bits=true, event values >0x7F are treated as 0x7F.
+	 * If use7bits=true, event values above 0x7F are treated as 0x7F.
 	 * This avoids the special handling of 0x80-0x9f, when working with a character set (such as
 	 * CP-437) where those are printable.
-	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values above 0xFF are treated as 0x7F.
 	 * 
-	 * @param callback Called when an escape sequence is parsed.
+	 * @param emulator VTEmulator implementation called when an escape sequence is parsed.
+	 * @param use7bits Flag to process the text as 7-bit ASCII instead of 8-bit.
 	 */
 	public VTParser(VTEmulator emulator, boolean use7bits) {
 		if (use7bits) {
@@ -167,12 +168,13 @@ public class VTParser implements ActionHandler<Action, State, Character> {
 
 	/**
 	 * Returns the given text with all escape sequences stripped out of it.
-	 * If use7bits=true, event values >0x7F are treated as 0x7F.
+	 * If use7bits=true, event values above 0x7F are treated as 0x7F.
 	 * This avoids the special handling of 0x80-0x9f, when working with a character set (such as
 	 * CP-437) where those are printable.
-	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values >0xFF are treated as 0x7F.
+	 * Otherwise, values 0xA0-0xFF are treated as 0x20-0x7F and values above 0xFF are treated as 0x7F.
 	 * 
 	 * @param text Text to process.
+	 * @param use7bits Flag to process the text as 7-bit ASCII instead of 8-bit.
 	 * @return Text with all escape sequences removed.
 	 */
 	public static String stripString(String text, boolean use7bits) {
@@ -359,7 +361,7 @@ public class VTParser implements ActionHandler<Action, State, Character> {
 
 	/**
 	 * Test program, parses text from STDIN.
-	 * @param args
+	 * @param args Command-line arguments for test program.
 	 */
 	public static void main(String[] args) {
 		StringBuilder sb = new StringBuilder();
