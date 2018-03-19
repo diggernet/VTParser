@@ -8,6 +8,15 @@ It implements [Paul Flo Williams' state machine](https://vt100.net/emu/dec_ansi_
 and is loosely based on [Joshua Haberman's vtparse](https://github.com/haberman/vtparse).
 
 
+## Maven configuration
+
+		<dependency>
+			<groupId>net.digger</groupId>
+			<artifactId>vt-parser</artifactId>
+			<version>1.0.0</version>
+		</dependency>
+
+
 ## Usage
 1. Implement the VTEmulator interface, which contains handlers for all the
 possible ANSI/VT actions.  Implement only those actions you care about, and
@@ -25,6 +34,10 @@ command, and params contains the list of codes for setting text color.
 
 [JScreen](https://github.com/diggernet/JScreen) contains a VTEmulator implementation 
 in ANSI.java.
+
+## Dependencies
+* [Java 8](https://www.oracle.com/java)
+* [StateMachine](https://github.com/diggernet/StateMachine)
 
 ## License
 VTParser is provided under the terms of the GNU LGPLv3.
